@@ -1,8 +1,7 @@
-"""VoiceShield inference: predict(path) -> fake probability, risk level, action."""
+"""VoiceShield inference: predict(path) -> verdict, fake probability, risk level, action."""
 from pathlib import Path
 
 import numpy as np
-import torch
 
 from ml.extract_embeddings import embed_file, load_encoder
 from ml.train import load_checkpoint, predict_scores
@@ -10,7 +9,6 @@ from ml.train import load_checkpoint, predict_scores
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = ROOT / "models" / "head.pt"
 
-# Chosen from dev/test score tables (ml/thr_check.py). Higher = more likely fake.
 BANDS = [
     (0.90, "HIGH_RISK"),
     (0.50, "SUSPICIOUS"),
@@ -23,6 +21,13 @@ ACTIONS = {
     "INSUFFICIENT_EVIDENCE": "Result is unclear. Do not act on requests for money or codes. Hang up and call back on a number you already know.",
     "SUSPICIOUS": "This voice shows signs of being synthetic. Do not share OTPs or send money. Hang up and call back on a known number.",
     "HIGH_RISK": "Very likely an AI-generated voice. Hang up now, do not share any codes or money, and verify through a number you already trust.",
+}
+
+VERDICT = {
+    "HIGH_RISK": "Fake",
+    "SUSPICIOUS": "Fake",
+    "INSUFFICIENT_EVIDENCE": "Uncertain",
+    "LIKELY_GENUINE": "Real",
 }
 
 
@@ -45,10 +50,15 @@ class VoiceShieldInference:
 
     def predict(self, path):
         emb = embed_file(self.encoder, str(path), device=self.device, strict=True)
-        p = self.score_embedding(emb)
+        p = round(self.score_embedding(emb), 4)
         level = risk_level(p)
-        return {"fake_probability": round(p, 4), "risk_level": level,
+        verdict = VERDICT[level]
+        conf = round(1.0 - p if verdict == "Real" else p, 4)
+        base = {"fake_probability": p, "risk_level": level,
                 "recommended_action": ACTIONS[level]}
+        out = dict(base)
+        out.update({"prediction": verdict, "confidence": conf, "details": dict(base)})
+        return out
 
     def predict_timeline(self, path):
         from ml.streaming import timeline

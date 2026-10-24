@@ -2,7 +2,7 @@ import librosa
 import numpy as np
 import soundfile as sf
 
-from src.config import SAMPLE_RATE, MIN_DURATION, MAX_DURATION, TRAIN_SEGMENT_SECONDS
+from ml.config import SAMPLE_RATE, MIN_DURATION, MAX_DURATION, TRAIN_SEGMENT_SECONDS
 
 TARGET_SR = SAMPLE_RATE
 

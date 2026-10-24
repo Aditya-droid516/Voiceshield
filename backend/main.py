@@ -73,30 +73,32 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 # ------------------------------------------------------------------ model ---
 class Detector:
-    """Frozen WavLM-base + small trained head. Loaded once at startup."""
-
+    # Uses the team ML pipeline (ml/inference.py) so serving matches training.
     def __init__(self) -> None:
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.extractor = AutoFeatureExtractor.from_pretrained(BACKBONE)
-        self.backbone = WavLMModel.from_pretrained(BACKBONE).to(self.device).eval()
-        # ADAPT: must be the same head + pooling you trained with.
-        # Assumed: nn.Module taking mean-pooled (B, 768) -> 1 logit (fake)
-        # or 2 logits [real, fake].
-        self.head = torch.load(
-            HEAD_PATH, map_location=self.device, weights_only=False
-        ).eval()
+        from ml.inference import VoiceShieldInference
+        self.device = "cpu"
+        self.engine = VoiceShieldInference()
 
-    @torch.inference_mode()
     def score(self, wav: np.ndarray) -> float:
-        """Probability (0-1) that a 16 kHz mono float32 waveform is fake."""
-        inputs = self.extractor(wav, sampling_rate=SR, return_tensors="pt")
-        x = inputs["input_values"].to(self.device)
-        hidden = self.backbone(x).last_hidden_state      # (1, T, 768)
-        pooled = hidden.mean(dim=1)                       # (1, 768)
-        out = self.head(pooled).reshape(-1)
-        if out.numel() == 2:
-            return float(torch.softmax(out, dim=0)[1])
-        return float(torch.sigmoid(out[0]))
+        # Probability (0-1) that a 16 kHz mono float32 waveform is fake.
+        import os, tempfile
+        import soundfile as sf
+        wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+        min_len = int(SR * 2.1)
+        if wav.size < min_len:
+            wav = np.tile(wav, int(np.ceil(min_len / max(wav.size, 1))))[:min_len]
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.close()
+        try:
+            sf.write(tmp.name, wav, SR)
+            return float(self.engine.predict(tmp.name)["fake_probability"])
+        except Exception:
+            return 0.5  # too short or silent after trimming: no evidence either way
+        finally:
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
 
 
 detector: Detector | None = None
